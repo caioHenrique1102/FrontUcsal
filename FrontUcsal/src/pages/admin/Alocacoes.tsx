@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -7,167 +7,197 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Badge } from '@/components/ui/badge';
 import { Plus, Calendar, User, BookOpen, Clock } from 'lucide-react';
 import { toast } from 'sonner';
+import { Input } from '@/components/ui/input';
 
 interface Alocacao {
-  id: string;
-  professor: string;
-  disciplina: string;
-  horario: string;
-  turma: string;
-  semestre: string;
+    id: string;
+    professorResponseSimples: { nome: string };
+    matrizDisciplinaResponseSimples: { disciplinaResponse: { nome: string } };
+    horarioResponse: { diaSemana: string; horarioInicio: string; horarioFinal: string };
+    turmaResponse: { codigo: string };
 }
 
 const Alocacoes = () => {
-  const [alocacoes, setAlocacoes] = useState<Alocacao[]>([
-    { id: '1', professor: 'Prof. João Silva', disciplina: 'Algoritmos e Programação', horario: 'Segunda 07:00-09:30', turma: 'Turma A', semestre: '2025.1' },
-    { id: '2', professor: 'Prof. João Silva', disciplina: 'Estrutura de Dados', horario: 'Terça 13:30-16:00', turma: 'Turma B', semestre: '2025.1' },
-    { id: '3', professor: 'Profa. Maria Santos', disciplina: 'Banco de Dados', horario: 'Quarta 19:00-21:30', turma: 'Turma C', semestre: '2025.1' }
-  ]);
+    const [alocacoes, setAlocacoes] = useState<Alocacao[]>([]);
+    const [professores, setProfessores] = useState<any[]>([]);
+    const [disciplinas, setDisciplinas] = useState<any[]>([]);
+    const [horarios, setHorarios] = useState<any[]>([]);
+    const [turmas, setTurmas] = useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
 
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [professor, setProfessor] = useState('');
-  const [disciplina, setDisciplina] = useState('');
-  const [horario, setHorario] = useState('');
+    useEffect(() => {
+        const fetchData = async () => {
+            try {
+                const headers = { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` };
+                const [alocResponse, profResponse, discResponse, horResponse, turmaResponse] = await Promise.all([
+                    fetch('/admin/alocacoes', { headers }),
+                    fetch('/api/professores/ativos', { headers }),
+                    fetch('/api/matriz-disciplinas', { headers }),
+                    fetch('/api/horarios', { headers }),
+                    fetch('/api/turmas', { headers }),
+                ]);
 
-  const professores = ['Prof. João Silva', 'Profa. Maria Santos', 'Prof. Carlos Oliveira'];
-  const disciplinas = ['Algoritmos e Programação', 'Estrutura de Dados', 'Banco de Dados', 'POO'];
-  const horarios = ['Segunda 07:00-09:30', 'Segunda 09:50-12:20', 'Terça 13:30-16:00', 'Quarta 19:00-21:30'];
+                setAlocacoes(await alocResponse.json());
+                setProfessores(await profResponse.json());
+                setDisciplinas(await discResponse.json());
+                setHorarios(await horResponse.json());
+                setTurmas(await turmaResponse.json());
 
-  const handleSave = () => {
-    if (!professor || !disciplina || !horario) {
-      toast.error('Todos os campos são obrigatórios');
-      return;
-    }
+            } catch (error) {
+                toast.error("Erro ao carregar dados para alocação.");
+            } finally {
+                setLoading(false);
+            }
+        };
+        fetchData();
+    }, []);
 
-    const turmaLetra = String.fromCharCode(65 + alocacoes.length);
-    const novaAlocacao: Alocacao = {
-      id: Date.now().toString(),
-      professor,
-      disciplina,
-      horario,
-      turma: `Turma ${turmaLetra}`,
-      semestre: '2025.1'
+    const [isDialogOpen, setIsDialogOpen] = useState(false);
+    const [professor, setProfessor] = useState('');
+    const [disciplina, setDisciplina] = useState('');
+    const [horario, setHorario] = useState('');
+    const [turma, setTurma] = useState('');
+
+    const handleSave = async () => {
+        if (!professor || !disciplina || !horario || !turma) {
+            toast.error('Todos os campos são obrigatórios');
+            return;
+        }
+
+        const novaAlocacao = { professorId: professor, matrizDisciplinaId: disciplina, horarioId: horario, turmaId: turma };
+
+        try {
+            const response = await fetch('/admin/alocacoes', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+                },
+                body: JSON.stringify(novaAlocacao),
+            });
+
+            if (!response.ok) throw new Error('Falha ao realizar alocação');
+
+            const savedAlocacao = await response.json();
+            setAlocacoes([...alocacoes, savedAlocacao]);
+            toast.success('Alocação realizada com sucesso!');
+            closeDialog();
+        } catch (error) {
+            toast.error('Erro ao realizar alocação');
+        }
     };
 
-    setAlocacoes([...alocacoes, novaAlocacao]);
-    toast.success('Alocação realizada com sucesso!');
-    closeDialog();
-  };
+    const closeDialog = () => {
+        setIsDialogOpen(false);
+        setProfessor('');
+        setDisciplina('');
+        setHorario('');
+        setTurma('');
+    };
 
-  const closeDialog = () => {
-    setIsDialogOpen(false);
-    setProfessor('');
-    setDisciplina('');
-    setHorario('');
-  };
-
-  return (
-    <div className="p-6 space-y-6">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-3xl font-bold">Gerenciar Alocações</h1>
-          <p className="text-muted-foreground">Aloque professores nas disciplinas e horários</p>
-        </div>
-        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogTrigger asChild>
-            <Button onClick={closeDialog}>
-              <Plus className="h-4 w-4 mr-2" />
-              Nova Alocação
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Nova Alocação</DialogTitle>
-              <DialogDescription>
-                Aloque um professor em uma disciplina e horário
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4 py-4">
-              <div className="space-y-2">
-                <Label>Professor</Label>
-                <Select value={professor} onValueChange={setProfessor}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Selecione o professor" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {professores.map((p) => (
-                      <SelectItem key={p} value={p}>{p}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Disciplina</Label>
-                <Select value={disciplina} onValueChange={setDisciplina}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Selecione a disciplina" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {disciplinas.map((d) => (
-                      <SelectItem key={d} value={d}>{d}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Horário</Label>
-                <Select value={horario} onValueChange={setHorario}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Selecione o horário" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {horarios.map((h) => (
-                      <SelectItem key={h} value={h}>{h}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+    return (
+        <div className="p-6 space-y-6">
+            <div className="flex justify-between items-center">
+                <div>
+                    <h1 className="text-3xl font-bold">Gerenciar Alocações</h1>
+                    <p className="text-muted-foreground">Aloque professores nas disciplinas e horários</p>
+                </div>
+                <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+                    <DialogTrigger asChild>
+                        <Button onClick={() => setIsDialogOpen(true)}>
+                            <Plus className="h-4 w-4 mr-2" />
+                            Nova Alocação
+                        </Button>
+                    </DialogTrigger>
+                    <DialogContent>
+                        <DialogHeader>
+                            <DialogTitle>Nova Alocação</DialogTitle>
+                        </DialogHeader>
+                        <div className="space-y-4 py-4">
+                            <div className="space-y-2">
+                                <Label>Professor</Label>
+                                <Select value={professor} onValueChange={setProfessor}>
+                                    <SelectTrigger><SelectValue placeholder="Selecione o professor" /></SelectTrigger>
+                                    <SelectContent>
+                                        {professores.map((p) => <SelectItem key={p.id} value={p.id}>{p.nome}</SelectItem>)}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Disciplina</Label>
+                                <Select value={disciplina} onValueChange={setDisciplina}>
+                                    <SelectTrigger><SelectValue placeholder="Selecione a disciplina" /></SelectTrigger>
+                                    <SelectContent>
+                                        {disciplinas.map((d) => <SelectItem key={d.id} value={d.id}>{d.disciplinaResponse.nome}</SelectItem>)}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Horário</Label>
+                                <Select value={horario} onValueChange={setHorario}>
+                                    <SelectTrigger><SelectValue placeholder="Selecione o horário" /></SelectTrigger>
+                                    <SelectContent>
+                                        {horarios.map((h) => <SelectItem key={h.id} value={h.id}>{`${h.diaSemana} ${h.horarioInicio}-${h.horarioFinal}`}</SelectItem>)}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Turma</Label>
+                                <Select value={turma} onValueChange={setTurma}>
+                                    <SelectTrigger><SelectValue placeholder="Selecione a turma" /></SelectTrigger>
+                                    <SelectContent>
+                                        {turmas.map((t) => <SelectItem key={t.id} value={t.id}>{t.codigo}</SelectItem>)}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        </div>
+                        <DialogFooter>
+                            <Button variant="outline" onClick={closeDialog}>Cancelar</Button>
+                            <Button onClick={handleSave}>Alocar</Button>
+                        </DialogFooter>
+                    </DialogContent>
+                </Dialog>
             </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={closeDialog}>Cancelar</Button>
-              <Button onClick={handleSave}>Alocar</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Semestre 2025.1</CardTitle>
-          <CardDescription>{alocacoes.length} alocações realizadas</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            {alocacoes.map((alocacao) => (
-              <div key={alocacao.id} className="p-4 border rounded-lg">
-                <div className="flex items-start justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <Calendar className="h-5 w-5 text-primary" />
-                    <h3 className="font-semibold">{alocacao.turma}</h3>
-                  </div>
-                  <Badge>Ativa</Badge>
-                </div>
-                <div className="grid gap-2 text-sm">
-                  <div className="flex items-center gap-2">
-                    <User className="h-4 w-4 text-muted-foreground" />
-                    <span>{alocacao.professor}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <BookOpen className="h-4 w-4 text-muted-foreground" />
-                    <span>{alocacao.disciplina}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Clock className="h-4 w-4 text-muted-foreground" />
-                    <span>{alocacao.horario}</span>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
+            {loading ? <p>Carregando alocações...</p> : (
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Semestre 2025.1</CardTitle>
+                        <CardDescription>{alocacoes.length} alocações realizadas</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="space-y-3">
+                            {alocacoes.map((alocacao) => (
+                                <div key={alocacao.id} className="p-4 border rounded-lg">
+                                    <div className="flex items-start justify-between mb-3">
+                                        <div className="flex items-center gap-2">
+                                            <Calendar className="h-5 w-5 text-primary" />
+                                            <h3 className="font-semibold">{alocacao.turmaResponse.codigo}</h3>
+                                        </div>
+                                        <Badge>Ativa</Badge>
+                                    </div>
+                                    <div className="grid gap-2 text-sm">
+                                        <div className="flex items-center gap-2">
+                                            <User className="h-4 w-4 text-muted-foreground" />
+                                            <span>{alocacao.professorResponseSimples.nome}</span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <BookOpen className="h-4 w-4 text-muted-foreground" />
+                                            <span>{alocacao.matrizDisciplinaResponseSimples.disciplinaResponse.nome}</span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <Clock className="h-4 w-4 text-muted-foreground" />
+                                            <span>{`${alocacao.horarioResponse.diaSemana} ${alocacao.horarioResponse.horarioInicio}-${alocacao.horarioResponse.horarioFinal}`}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
+        </div>
+    );
 };
 
 export default Alocacoes;

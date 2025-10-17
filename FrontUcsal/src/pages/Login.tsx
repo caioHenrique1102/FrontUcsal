@@ -73,12 +73,6 @@ const Login = () => {
               {isLoading ? 'Entrando...' : 'Entrar'}
             </Button>
           </form>
-          <div className="mt-6 p-3 bg-muted rounded-lg text-sm">
-            <p className="font-semibold mb-2">Usuários de teste:</p>
-            <p className="text-muted-foreground">Admin: admin@ucsal.br</p>
-            <p className="text-muted-foreground">Professor: joao@ucsal.br</p>
-            <p className="text-muted-foreground text-xs mt-2">Qualquer senha funciona</p>
-          </div>
         </CardContent>
       </Card>
     </div>
