@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -6,84 +6,101 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Pencil, User } from 'lucide-react';
+import { Plus, Pencil, User, Trash } from 'lucide-react'; // Adicionei o Trash
 import { toast } from 'sonner';
+import { fetchJsonWithAuth, fetchWithAuth } from '@/lib/api'; // Meus helpers
 
+// Interface para Professor como vem da API
 interface Professor {
     id: string;
     registro: string;
     nome: string;
-    escolas: { id: string; categoriaEscola: string }[];
+    escolas: EscolaSimples[];
     ativo: boolean;
     cpf: string;
     email: string;
 }
 
-interface Escola {
+// Interface simplificada para Escola
+interface EscolaSimples {
     id: string;
     categoriaEscola: string;
 }
 
 const Professores = () => {
     const [professores, setProfessores] = useState<Professor[]>([]);
-    const [escolas, setEscolas] = useState<Escola[]>([]);
+    const [escolasAtivas, setEscolasAtivas] = useState<EscolaSimples[]>([]);
     const [loading, setLoading] = useState(true);
 
-    useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const [profResponse, escolasResponse] = await Promise.all([
-                    fetch('/api/professores', { headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` } }),
-                    fetch('/admin/api/escolas/ativas', { headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` } })
-                ]);
+    // Função para buscar professores e escolas ativas
+    const fetchData = useCallback(async () => {
+        setLoading(true);
+        try {
+            // Busco professores e escolas ativas em paralelo
+            const [profData, escolasData] = await Promise.all([
+                fetchJsonWithAuth<Professor[]>('/api/professores'), // Lista todos
+                fetchJsonWithAuth<EscolaSimples[]>('/admin/api/escolas/ativas') // Lista só ativas para o Select
+            ]);
 
-                if (!profResponse.ok || !escolasResponse.ok) throw new Error('Falha ao carregar dados');
-
-                const profData = await profResponse.json();
-                const escolasData = await escolasResponse.json();
-
-                setProfessores(profData);
-                setEscolas(escolasData);
-            } catch (error) {
-                toast.error("Erro ao carregar professores ou escolas.");
-            } finally {
-                setLoading(false);
-            }
-        };
-        fetchData();
+            setProfessores(profData || []);
+            setEscolasAtivas(escolasData || []);
+        } catch (error) {
+            console.error("Erro ao carregar professores ou escolas:", error);
+        } finally {
+            setLoading(false);
+        }
     }, []);
 
+    // Busco os dados ao montar o componente
+    useEffect(() => {
+        fetchData();
+    }, [fetchData]);
+
+    // Estados para o formulário do modal
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [editingProf, setEditingProf] = useState<Professor | null>(null);
     const [registro, setRegistro] = useState('');
     const [nome, setNome] = useState('');
-    const [escola, setEscola] = useState('');
+    const [escolaId, setEscolaId] = useState(''); // Armazena o ID da escola selecionada
     const [cpf, setCpf] = useState('');
     const [email, setEmail] = useState('');
 
+    // Função para salvar (criar ou editar)
     const handleSave = async () => {
-        if (!registro.trim() || !nome.trim() || !escola || !cpf.trim() || !email.trim()) {
-            toast.error('Todos os campos são obrigatórios');
+        if (!nome.trim() || !escolaId || !cpf.trim() || !email.trim() || (editingProf == null && !registro.trim())) {
+            toast.error('Todos os campos (exceto registro ao editar) são obrigatórios');
             return;
         }
 
-        const professorData = { nome, cpf, email, registro, escolasIds: [escola] };
-        const url = editingProf ? `/api/professores/${editingProf.id}` : '/api/professores';
-        const method = editingProf ? 'PATCH' : 'POST';
+        let url: string;
+        let method: string;
+        let professorData: any;
+
+        if (editingProf) {
+            // ATUALIZAÇÃO (PATCH)
+            // O DTO de update do backend (ProfessorUpdateRequest) só aceita nome, email, formacaoId e escolasIds
+            url = `/api/professores/${editingProf.id}`;
+            method = 'PATCH';
+            professorData = {
+                nome,
+                email,
+                escolasIds: [escolaId]
+                // formacaoId: null // Adicionar se/quando o formulário tiver
+            };
+            // Eu não envio CPF e Registro na atualização, pois o DTO do backend não suporta
+        } else {
+            // CRIAÇÃO (POST)
+            // O DTO de criação (ProfessorCreateRequest) aceita todos os campos
+            url = '/api/professores';
+            method = 'POST';
+            professorData = { nome, cpf, email, registro, escolasIds: [escolaId] };
+        }
 
         try {
-            const response = await fetch(url, {
+            const savedProfessor = await fetchJsonWithAuth<Professor>(url, {
                 method,
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${localStorage.getItem('authToken')}`
-                },
                 body: JSON.stringify(professorData),
             });
-
-            if (!response.ok) throw new Error('Falha ao salvar professor');
-
-            const savedProfessor = await response.json();
 
             if (editingProf) {
                 setProfessores(professores.map(p => (p.id === editingProf.id ? savedProfessor : p)));
@@ -92,48 +109,67 @@ const Professores = () => {
                 setProfessores([...professores, savedProfessor]);
                 toast.success('Professor cadastrado com sucesso');
             }
-
             closeDialog();
         } catch (error) {
-            toast.error('Erro ao salvar professor');
+            console.error('Erro ao salvar professor:', error);
+            // O toast de erro já deve ter sido mostrado pelo helper
         }
     };
 
+    // Função para DELETAR
+    const handleDelete = async (id: string) => {
+        if (!window.confirm("Tem certeza que deseja excluir este professor? Esta ação não pode ser desfeita.")) {
+            return;
+        }
+        try {
+            await fetchWithAuth(`/api/professores/${id}`, { method: 'DELETE' });
+            setProfessores(professores.filter(p => p.id !== id)); // Remove da lista local
+            toast.success('Professor excluído com sucesso');
+        } catch (error) {
+            console.error('Erro ao excluir professor:', error);
+        }
+    };
+
+    // Limpa o formulário e fecha o modal
     const closeDialog = () => {
         setIsDialogOpen(false);
         setEditingProf(null);
         setRegistro('');
         setNome('');
-        setEscola('');
+        setEscolaId('');
         setCpf('');
         setEmail('');
     };
 
+    // Função para ativar/desativar professor
     const toggleStatus = async (id: string, ativo: boolean) => {
-        const url = `/api/professores/${id}/${ativo ? 'desativar' : 'ativar'}`;
+        const action = ativo ? 'desativar' : 'ativar';
+        const url = `/api/professores/${id}/${action}`;
         try {
-            const response = await fetch(url, {
-                method: 'PUT',
-                headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` }
-            });
-
-            if (!response.ok) throw new Error('Falha ao atualizar status');
-
+            await fetchWithAuth(url, { method: 'PUT' });
+            // Atualizo o estado local
             setProfessores(professores.map(p => (p.id === id ? { ...p, ativo: !ativo } : p)));
-            toast.success('Status atualizado com sucesso');
+            toast.success(`Professor ${ativo ? 'desativado' : 'ativado'} com sucesso`);
         } catch (error) {
-            toast.error('Erro ao atualizar status do professor');
+            console.error(`Erro ao ${action} professor:`, error);
         }
     };
 
+    // Preenche o formulário do modal para edição
     const openEdit = (prof: Professor) => {
         setEditingProf(prof);
-        setRegistro(prof.registro);
+        setRegistro(prof.registro); // Mantenho para exibição, mesmo não sendo editável
         setNome(prof.nome);
-        setEscola(prof.escolas.length > 0 ? prof.escolas[0].id : '');
-        setCpf(prof.cpf);
+        setEscolaId(prof.escolas.length > 0 ? prof.escolas[0].id : '');
+        setCpf(prof.cpf); // Mantenho para exibição
         setEmail(prof.email);
         setIsDialogOpen(true);
+    };
+
+    // Abre o modal limpo para criar
+    const openNew = () => {
+        closeDialog(); // Limpa tudo
+        setIsDialogOpen(true); // Abre o modal
     };
 
     return (
@@ -145,7 +181,7 @@ const Professores = () => {
                 </div>
                 <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
                     <DialogTrigger asChild>
-                        <Button onClick={closeDialog}>
+                        <Button onClick={openNew}> {/* Garante que abra limpo */}
                             <Plus className="h-4 w-4 mr-2" />
                             Novo Professor
                         </Button>
@@ -154,7 +190,7 @@ const Professores = () => {
                         <DialogHeader>
                             <DialogTitle>{editingProf ? 'Editar Professor' : 'Novo Professor'}</DialogTitle>
                         </DialogHeader>
-                        <div className="space-y-4 py-4">
+                        <div className="space-y-4 py-4 max-h-[70vh] overflow-y-auto pr-2">
                             <div className="space-y-2">
                                 <Label htmlFor="nome">Nome Completo</Label>
                                 <Input id="nome" value={nome} onChange={(e) => setNome(e.target.value)} />
@@ -165,21 +201,23 @@ const Professores = () => {
                             </div>
                             <div className="space-y-2">
                                 <Label htmlFor="cpf">CPF</Label>
-                                <Input id="cpf" value={cpf} onChange={(e) => setCpf(e.target.value)} />
+                                {/* Desabilito o CPF na edição, pois não pode ser alterado via PATCH */}
+                                <Input id="cpf" value={cpf} onChange={(e) => setCpf(e.target.value)} disabled={!!editingProf} />
                             </div>
                             <div className="space-y-2">
                                 <Label htmlFor="registro">Número de Registro</Label>
-                                <Input id="registro" value={registro} onChange={(e) => setRegistro(e.target.value)} />
+                                {/* Desabilito o Registro na edição, pois não pode ser alterado via PATCH */}
+                                <Input id="registro" value={registro} onChange={(e) => setRegistro(e.target.value)} disabled={!!editingProf} />
                             </div>
                             <div className="space-y-2">
                                 <Label htmlFor="escola">Escola</Label>
-                                <Select value={escola} onValueChange={setEscola}>
+                                <Select value={escolaId} onValueChange={setEscolaId}>
                                     <SelectTrigger>
                                         <SelectValue placeholder="Selecione a escola" />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        {escolas.map((e) => (
-                                            <SelectItem key={e.id} value={e.id}>{e.categoriaEscola}</SelectItem>
+                                        {escolasAtivas.map((e) => (
+                                            <SelectItem key={e.id} value={e.id}>{e.categoriaEscola.replace(/_/g, ' ')}</SelectItem>
                                         ))}
                                     </SelectContent>
                                 </Select>
@@ -187,13 +225,13 @@ const Professores = () => {
                         </div>
                         <DialogFooter>
                             <Button variant="outline" onClick={closeDialog}>Cancelar</Button>
-                            <Button onClick={handleSave}>Salvar</Button>
+                            <Button onClick={handleSave}>{editingProf ? 'Atualizar' : 'Salvar'}</Button>
                         </DialogFooter>
                     </DialogContent>
                 </Dialog>
             </div>
 
-            {loading ? <p>Carregando...</p> : (
+            {loading ? <p>Carregando professores...</p> : (
                 <div className="grid gap-4">
                     {professores.map((prof) => (
                         <Card key={prof.id}>
@@ -206,7 +244,7 @@ const Professores = () => {
                                         <div>
                                             <CardTitle>{prof.nome}</CardTitle>
                                             <CardDescription>
-                                                Registro: {prof.registro} • {prof.escolas.map(e => e.categoriaEscola).join(', ')}
+                                                Registro: {prof.registro} • {prof.escolas.map(e => e.categoriaEscola.replace(/_/g, ' ')).join(', ')}
                                             </CardDescription>
                                         </div>
                                     </div>
@@ -224,10 +262,16 @@ const Professores = () => {
                                     <Button variant="outline" size="sm" onClick={() => toggleStatus(prof.id, prof.ativo)}>
                                         {prof.ativo ? 'Desativar' : 'Ativar'}
                                     </Button>
+                                    {/* Adiciono um botão de deletar */}
+                                    <Button variant="destructive" size="sm" onClick={() => handleDelete(prof.id)}>
+                                        <Trash className="h-4 w-4 mr-2" />
+                                        Excluir
+                                    </Button>
                                 </div>
                             </CardContent>
                         </Card>
                     ))}
+                    {professores.length === 0 && <p>Nenhum professor encontrado.</p>}
                 </div>
             )}
         </div>

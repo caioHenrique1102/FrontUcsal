@@ -7,70 +7,78 @@ import { Badge } from '@/components/ui/badge';
 import { BookOpen, Star } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
+import { fetchJsonWithAuth, fetchWithAuth } from '@/lib/api'; // Meus helpers
 
 // --- Interfaces para tipagem dos dados ---
 type PrioridadeNivel = 'POUCO_INTERESSE' | 'MUITO_INTERESSE';
 
+// Representa uma Disciplina dentro de uma Matriz (MatrizDisciplina)
 interface DisciplinaMatriz {
-    id: string;
+    id: string; // ID da MatrizDisciplina
     disciplinaResponse: {
+        id: string;
         nome: string;
-        cargaHoraria: number;
     };
+    cargaHoraria: number; // A API de MatrizDisciplina inclui cargaHoraria
 }
 
+// Representa uma Prioridade salva (vem de /api/prioridades/minhas)
 interface Prioridade {
-    id: string;
-    prioridade: PrioridadeNivel;
+    id: string; // ID da entidade Prioridade
+    prioridade: PrioridadeNivel; // O backend usa 'prioridade'
     matrizDisciplinaResponseSimples: {
-        id: string;
+        id: string; // ID da MatrizDisciplina
+        disciplinaResponse: { nome: string }; // E outros campos
     };
 }
 // -----------------------------------------
 
+// Mapeamento para exibição amigável
+const PRIORIDADE_MAP_DISPLAY: Record<PrioridadeNivel, string> = {
+    POUCO_INTERESSE: 'Pouco Interesse',
+    MUITO_INTERESSE: 'Muito Interesse'
+};
+
 const Interesses = () => {
     const { user } = useAuth();
 
-    // Estados para gerenciar os dados
-    const [disciplinas, setDisciplinas] = useState<DisciplinaMatriz[]>([]);
-    const [profPrioridades, setProfPrioridades] = useState<Prioridade[]>([]);
-    const [interesses, setInteresses] = useState<Map<string, PrioridadeNivel>>(new Map());
+    const [disciplinasMatriz, setDisciplinasMatriz] = useState<DisciplinaMatriz[]>([]);
+    const [profPrioridadesSalvas, setProfPrioridadesSalvas] = useState<Prioridade[]>([]);
+    // Mapa da UI: <matrizDisciplinaId, Nivel>
+    const [interessesUI, setInteressesUI] = useState<Map<string, PrioridadeNivel>>(new Map());
     const [loading, setLoading] = useState(true);
 
     // Função para buscar dados da API
     const fetchData = useCallback(async () => {
-        if (!user || !user.id) return;
+        if (!user || user.role !== 'professor' || !user.professorId) {
+            setLoading(false);
+            return;
+        };
+
         setLoading(true);
         try {
-            const headers = { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` };
-
-            const [discResponse, prioResponse] = await Promise.all([
-                fetch('/api/matriz-disciplinas', { headers }),
-                fetch(`/api/prioridades?professorId=${user.id}`, { headers })
+            // Busco todas as MatrizDisciplinas e as minhas prioridades salvas
+            const [discMatrizData, prioData] = await Promise.all([
+                fetchJsonWithAuth<DisciplinaMatriz[]>('/api/matriz-disciplinas'),
+                fetchJsonWithAuth<Prioridade[]>(`/api/prioridades/minhas`) // Endpoint 'minhas' existe!
             ]);
 
-            if (!discResponse.ok || !prioResponse.ok) {
-                throw new Error("Falha ao carregar dados.");
-            }
+            setDisciplinasMatriz(discMatrizData || []);
+            setProfPrioridadesSalvas(prioData || []);
 
-            const discData: DisciplinaMatriz[] = await discResponse.json();
-            const prioData: Prioridade[] = await prioResponse.json();
-
-            setDisciplinas(discData);
-            setProfPrioridades(prioData);
-
-            // CORREÇÃO: Cria o mapa de interesses de forma segura
+            // Crio o mapa inicial para a UI com base nas prioridades já salvas
             const prioMap = new Map<string, PrioridadeNivel>();
-            prioData.forEach(p => {
-                // Verifica se o objeto e seu ID existem antes de adicionar ao mapa
+            prioData?.forEach(p => {
+                // Eu verifico se os dados existem antes de tentar acessar
                 if (p.matrizDisciplinaResponseSimples?.id) {
+                    // O backend retorna o nível em 'prioridade'
                     prioMap.set(String(p.matrizDisciplinaResponseSimples.id), p.prioridade);
                 }
             });
-            setInteresses(prioMap);
+            setInteressesUI(prioMap);
 
         } catch (error) {
-            toast.error("Erro ao carregar interesses e disciplinas.");
+            console.error("Erro ao carregar interesses e disciplinas:", error);
         } finally {
             setLoading(false);
         }
@@ -80,66 +88,60 @@ const Interesses = () => {
         fetchData();
     }, [fetchData]);
 
-    // Função para atualizar o interesse em uma disciplina
-    const handlePrioridadeChange = (disciplinaId: string, prioridade: PrioridadeNivel | 'nenhum') => {
-        const newInteresses = new Map(interesses);
-        if (prioridade === 'nenhum') {
-            newInteresses.delete(disciplinaId);
+    // Função para atualizar o interesse na UI quando clico no Radio
+    const handlePrioridadeChange = (disciplinaMatrizId: string, prioridadeSelecionada: PrioridadeNivel | 'nenhum') => {
+        const newInteresses = new Map(interessesUI);
+        if (prioridadeSelecionada === 'nenhum') {
+            newInteresses.delete(disciplinaMatrizId); // Remove se marcou 'nenhum'
         } else {
-            newInteresses.set(disciplinaId, prioridade);
+            newInteresses.set(disciplinaMatrizId, prioridadeSelecionada); // Adiciona/atualiza
         }
-        setInteresses(newInteresses);
+        setInteressesUI(newInteresses);
     };
 
-    // Função para salvar as alterações
+    // Função para salvar as alterações na API
     const handleSave = async () => {
-        if (!user) return;
+        if (!user || !user.professorId) return;
 
-        // Mapeia os interesses originais por ID da disciplina para fácil comparação
-        const originalInteresses = new Map<string, Prioridade>();
-        profPrioridades.forEach(p => {
+        setLoading(true);
+
+        // Mapeio os interesses originais (salvos no backend) por ID da MatrizDisciplina
+        const originalInteressesMap = new Map<string, Prioridade>();
+        profPrioridadesSalvas.forEach(p => {
             if (p.matrizDisciplinaResponseSimples?.id) {
-                originalInteresses.set(String(p.matrizDisciplinaResponseSimples.id), p);
+                originalInteressesMap.set(String(p.matrizDisciplinaResponseSimples.id), p);
             }
         });
 
-        const promises = [];
-        const allDisciplinaIds = new Set(disciplinas.map(d => String(d.id)));
+        const promises: Promise<any>[] = [];
+        const allDisciplinaMatrizIds = new Set(disciplinasMatriz.map(d => String(d.id)));
 
-        // Itera sobre todas as disciplinas para identificar o que mudou
-        for (const disciplinaId of allDisciplinaIds) {
-            const original = originalInteresses.get(disciplinaId);
-            const novoNivel = interesses.get(disciplinaId);
+        // Comparo o estado original com o estado atual da UI
+        for (const disciplinaMatrizId of allDisciplinaMatrizIds) {
+            const originalPrioridade = originalInteressesMap.get(disciplinaMatrizId);
+            const novoNivelPrioridade = interessesUI.get(disciplinaMatrizId);
 
-            if (original && !novoNivel) {
-                // DELETAR: Tinha interesse, agora não tem mais
-                promises.push(fetch(`/api/prioridades/${original.id}`, {
-                    method: 'DELETE',
-                    headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` }
-                }));
-            } else if (!original && novoNivel) {
-                // CRIAR: Não tinha interesse, agora tem
-                promises.push(fetch('/api/prioridades', {
+            if (originalPrioridade && !novoNivelPrioridade) {
+                // CASO 1: DELETAR (tinha e agora é 'nenhum')
+                promises.push(fetchWithAuth(`/api/prioridades/${originalPrioridade.id}`, { method: 'DELETE' }));
+
+            } else if (!originalPrioridade && novoNivelPrioridade) {
+                // CASO 2: CRIAR (não tinha e agora tem)
+                // O DTO de criação (PrioridadeCreateRequest) não pede professorId
+                promises.push(fetchWithAuth('/api/prioridades', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${localStorage.getItem('authToken')}`
-                    },
                     body: JSON.stringify({
-                        professorId: user.id,
-                        matrizDisciplinaId: disciplinaId,
-                        prioridade: novoNivel
+                        matrizDisciplinaId: disciplinaMatrizId,
+                        prioridade: novoNivelPrioridade
                     })
                 }));
-            } else if (original && novoNivel && original.prioridade !== novoNivel) {
-                // ATUALIZAR: O nível de interesse mudou
-                promises.push(fetch(`/api/prioridades/${original.id}`, {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${localStorage.getItem('authToken')}`
-                    },
-                    body: JSON.stringify({ prioridade: novoNivel })
+
+            } else if (originalPrioridade && novoNivelPrioridade && originalPrioridade.prioridade !== novoNivelPrioridade) {
+                // CASO 3: ATUALIZAR (tinha e mudou o nível)
+                // O DTO de update (PrioridadeUpdateRequest) só pede 'prioridade'
+                promises.push(fetchWithAuth(`/api/prioridades/${originalPrioridade.id}`, {
+                    method: 'PATCH', // O controller usa PATCH
+                    body: JSON.stringify({ prioridade: novoNivelPrioridade })
                 }));
             }
         }
@@ -147,11 +149,18 @@ const Interesses = () => {
         try {
             await Promise.all(promises);
             toast.success('Interesses atualizados com sucesso!');
-            fetchData(); // Recarrega os dados para sincronizar o estado
+            await fetchData(); // Recarrego os dados para sincronizar o estado
         } catch (error) {
-            toast.error('Erro ao salvar os interesses.');
+            console.error('Erro ao salvar os interesses:', error);
+            await fetchData(); // Recarrego para reverter
+        } finally {
+            setLoading(false);
         }
     };
+
+    if (user?.role !== 'professor') {
+        return <div className="p-6">Acesso não autorizado.</div>;
+    }
 
     return (
         <div className="p-6 space-y-6">
@@ -162,14 +171,15 @@ const Interesses = () => {
                 </div>
                 <Button onClick={handleSave} disabled={loading}>
                     <Star className="h-4 w-4 mr-2" />
-                    Salvar Interesses
+                    {loading ? 'Salvando...' : 'Salvar Interesses'}
                 </Button>
             </div>
 
             {loading ? <p>Carregando disciplinas...</p> : (
                 <div className="grid gap-4 md:grid-cols-2">
-                    {disciplinas.map((disciplina) => {
-                        const prioridade = interesses.get(String(disciplina.id));
+                    {disciplinasMatriz.map((disciplina) => {
+                        // Pego a prioridade selecionada na UI
+                        const prioridadeUI = interessesUI.get(String(disciplina.id));
                         return (
                             <Card key={disciplina.id}>
                                 <CardHeader>
@@ -180,17 +190,26 @@ const Interesses = () => {
                                             </div>
                                             <div>
                                                 <CardTitle className="text-lg">{disciplina.disciplinaResponse.nome}</CardTitle>
+                                                <CardDescription>
+                                                    Carga horária: {disciplina.cargaHoraria}h
+                                                </CardDescription>
                                             </div>
                                         </div>
-                                        {prioridade && <Badge className="capitalize">{prioridade.toLowerCase().replace('_', ' ')}</Badge>}
+                                        {/* Mostro o badge se houver prioridade selecionada */}
+                                        {prioridadeUI && (
+                                            <Badge variant={prioridadeUI === 'MUITO_INTERESSE' ? 'default' : 'secondary'}>
+                                                {PRIORIDADE_MAP_DISPLAY[prioridadeUI]}
+                                            </Badge>
+                                        )}
                                     </div>
                                 </CardHeader>
                                 <CardContent>
                                     <RadioGroup
-                                        value={prioridade || 'nenhum'}
+                                        value={prioridadeUI || 'nenhum'} // O valor é o do mapa da UI
                                         onValueChange={(value) => handlePrioridadeChange(String(disciplina.id), value as any)}
                                     >
                                         <div className="flex flex-col space-y-2">
+                                            {/* O backend só tem 2 níveis, então removi o 'Prioridade 1' */}
                                             <div className="flex items-center space-x-2">
                                                 <RadioGroupItem value="MUITO_INTERESSE" id={`${disciplina.id}-alta`} />
                                                 <Label htmlFor={`${disciplina.id}-alta`}>Muito Interesse</Label>
@@ -209,6 +228,7 @@ const Interesses = () => {
                             </Card>
                         );
                     })}
+                    {disciplinasMatriz.length === 0 && <p>Nenhuma disciplina encontrada.</p>}
                 </div>
             )}
         </div>

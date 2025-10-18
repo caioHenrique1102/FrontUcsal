@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -7,104 +7,127 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Badge } from '@/components/ui/badge';
 import { Plus, Pencil, Building2 } from 'lucide-react';
 import { toast } from 'sonner';
+// Importo meus helpers de API
+import { fetchJsonWithAuth, fetchWithAuth } from '@/lib/api';
 
+// Interface para representar a Escola como vem da API
 interface Escola {
     id: string;
-    categoriaEscola: string;
+    categoriaEscola: string; // O nome da categoria/enum no backend
     ativo: boolean;
+}
+
+// Interface para a resposta paginada da API
+interface Page<T> {
+    content: T[];
+    totalElements: number;
+    // ... outros campos se necessário (totalPages, size, number, etc.)
 }
 
 const Escolas = () => {
     const [escolas, setEscolas] = useState<Escola[]>([]);
     const [loading, setLoading] = useState(true);
 
-    useEffect(() => {
-        const fetchEscolas = async () => {
-            try {
-                const response = await fetch('/admin/api/escolas', {
-                    headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` }
-                });
-                if (!response.ok) throw new Error('Falha ao buscar escolas');
-                const data = await response.json();
-                setEscolas(data.content);
-            } catch (error) {
-                toast.error('Erro ao carregar escolas.');
-            } finally {
-                setLoading(false);
-            }
-        };
-        fetchEscolas();
+    // Criei uma função para buscar os dados da API
+    const fetchEscolas = useCallback(async () => {
+        setLoading(true);
+        try {
+            // Uso meu helper para buscar os dados já com autenticação
+            // A API de escolas retorna um objeto Page, então pego o 'content'
+            const data = await fetchJsonWithAuth<Page<Escola>>('/admin/api/escolas');
+            setEscolas(data.content || []); // Garanto que seja um array
+        } catch (error) {
+            // O toast de erro já é mostrado pelo fetchWithAuth, mas logamos o erro aqui
+            console.error("Erro ao buscar escolas:", error);
+            setEscolas([]); // Limpo as escolas em caso de erro
+        } finally {
+            setLoading(false);
+        }
     }, []);
 
+    // Busco as escolas quando o componente monta
+    useEffect(() => {
+        fetchEscolas();
+    }, [fetchEscolas]);
+
+    // Estados para controlar o modal de criação/edição
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [editingEscola, setEditingEscola] = useState<Escola | null>(null);
-    const [nome, setNome] = useState('');
+    const [nome, setNome] = useState(''); // O nome é a 'categoriaEscola'
 
+    // Função para salvar (criar ou editar)
     const handleSave = async () => {
         if (!nome.trim()) {
             toast.error('Nome da escola é obrigatório');
             return;
         }
 
+        // Preparo os dados para enviar (o backend espera 'categoriaEscola')
         const escolaData = { categoriaEscola: nome };
+        // Defino a URL e o método (POST para criar, PATCH para editar)
         const url = editingEscola ? `/admin/api/escolas/${editingEscola.id}` : '/admin/api/escolas';
         const method = editingEscola ? 'PATCH' : 'POST';
 
         try {
-            const response = await fetch(url, {
+            // Faço a requisição usando meu helper
+            const savedEscola = await fetchJsonWithAuth<Escola>(url, {
                 method,
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${localStorage.getItem('authToken')}`
-                },
-                body: JSON.stringify(escolaData),
+                body: JSON.stringify(escolaData), // Envio os dados como JSON
             });
 
-            if (!response.ok) throw new Error('Falha ao salvar escola');
-
-            const savedEscola = await response.json();
-
             if (editingEscola) {
+                // Se eu estava editando, atualizo a escola na lista local
                 setEscolas(escolas.map(e => (e.id === editingEscola.id ? savedEscola : e)));
                 toast.success('Escola atualizada com sucesso');
             } else {
+                // Se eu estava criando, adiciono a nova escola na lista local
                 setEscolas([...escolas, savedEscola]);
                 toast.success('Escola cadastrada com sucesso');
             }
-
-            closeDialog();
+            closeDialog(); // Fecho o modal e limpo os campos
         } catch (error) {
-            toast.error('Erro ao salvar escola');
+            // O toast de erro já foi mostrado pelo fetchWithAuth
+            console.error("Erro ao salvar escola:", error);
         }
     };
 
+    // Função para fechar o modal e limpar os campos
     const closeDialog = () => {
         setIsDialogOpen(false);
         setNome('');
         setEditingEscola(null);
     };
 
+    // Função para ativar/desativar uma escola
     const toggleStatus = async (id: string, ativo: boolean) => {
-        const url = `/admin/api/escolas/${id}/${ativo ? 'desativar' : 'ativar'}`;
+        // Escolho o endpoint correto com base no estado atual
+        const action = ativo ? 'desativar' : 'ativar';
+        const url = `/admin/api/escolas/${id}/${action}`;
 
         try {
-            const response = await fetch(url, {
-                method: 'PUT',
-                headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` }
-            });
+            // Faço a requisição PUT usando meu helper (não preciso do JSON de resposta)
+            await fetchWithAuth(url, { method: 'PUT' });
 
-            if (!response.ok) throw new Error('Falha ao atualizar status');
-
+            // Atualizo o estado local da escola
             setEscolas(escolas.map(e => (e.id === id ? { ...e, ativo: !ativo } : e)));
-            toast.success('Status atualizado com sucesso');
+            toast.success(`Escola ${ativo ? 'desativada' : 'ativada'} com sucesso`);
         } catch (error) {
-            toast.error('Erro ao atualizar status da escola');
+            // O toast de erro já foi mostrado pelo fetchWithAuth
+            console.error(`Erro ao ${action} escola:`, error);
         }
     };
 
+    // Preenche o modal com os dados da escola para edição
     const openEdit = (escola: Escola) => {
         setEditingEscola(escola);
-        setNome(escola.categoriaEscola);
+        setNome(escola.categoriaEscola); // Uso o campo correto do backend
+        setIsDialogOpen(true);
+    };
+
+    // Limpa o modal para criar uma nova escola
+    const openNew = () => {
+        setEditingEscola(null);
+        setNome('');
         setIsDialogOpen(true);
     };
 
@@ -117,7 +140,7 @@ const Escolas = () => {
                 </div>
                 <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
                     <DialogTrigger asChild>
-                        <Button onClick={() => { setEditingEscola(null); setNome(''); setIsDialogOpen(true); }}>
+                        <Button onClick={openNew}>
                             <Plus className="h-4 w-4 mr-2" />
                             Nova Escola
                         </Button>
@@ -128,8 +151,14 @@ const Escolas = () => {
                         </DialogHeader>
                         <div className="space-y-4 py-4">
                             <div className="space-y-2">
-                                <Label htmlFor="nome">Nome da Escola</Label>
-                                <Input id="nome" value={nome} onChange={(e) => setNome(e.target.value)} />
+                                <Label htmlFor="nome">Nome da Escola (Categoria)</Label>
+                                <Input
+                                    id="nome"
+                                    value={nome}
+                                    onChange={(e) => setNome(e.target.value)}
+                                    placeholder="Ex: ESCOLA_DE_EDUCACAO"
+                                />
+                                <p className="text-xs text-muted-foreground">O nome deve ser o valor do Enum do backend (ex: ESCOLA_DE_EDUCACAO).</p>
                             </div>
                         </div>
                         <DialogFooter>
@@ -140,10 +169,12 @@ const Escolas = () => {
                 </Dialog>
             </div>
 
+            {/* Mostro o estado de carregamento */}
             {loading ? (
                 <p>Carregando escolas...</p>
             ) : (
                 <div className="grid gap-4 md:grid-cols-2">
+                    {/* Mapeio as escolas buscadas da API */}
                     {escolas.map((escola) => (
                         <Card key={escola.id}>
                             <CardHeader>
@@ -151,7 +182,8 @@ const Escolas = () => {
                                     <div className="flex-1">
                                         <CardTitle className="flex items-center gap-2">
                                             <Building2 className="h-5 w-5" />
-                                            {escola.categoriaEscola}
+                                            {/* Exibo o nome da categoria vindo da API, formatado */}
+                                            {escola.categoriaEscola.replace(/_/g, ' ')}
                                         </CardTitle>
                                         <CardDescription className="mt-2">
                                             <Badge variant={escola.ativo ? 'default' : 'secondary'}>
@@ -174,6 +206,8 @@ const Escolas = () => {
                             </CardContent>
                         </Card>
                     ))}
+                    {/* Mensagem se não houver dados */}
+                    {escolas.length === 0 && <p>Nenhuma escola encontrada.</p>}
                 </div>
             )}
         </div>

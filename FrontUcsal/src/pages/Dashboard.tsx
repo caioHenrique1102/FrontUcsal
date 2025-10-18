@@ -4,9 +4,23 @@ import {Building2, Users, BookOpen, Calendar, Clock, Star, GraduationCap} from '
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
+// 1. Crie a interface para definir o "formato" dos seus dados
+interface AdminStats {
+    escolas: number;
+    professores: number;
+    disciplinas: number;
+    alocacoes: number;
+}
+
 const Dashboard = () => {
     const { user } = useAuth();
-    const [stats, setStats] = useState<any>({});
+    // 2. Use a interface no useState e defina um estado inicial completo
+    const [stats, setStats] = useState<AdminStats>({
+        escolas: 0,
+        professores: 0,
+        disciplinas: 0,
+        alocacoes: 0,
+    });
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -65,7 +79,8 @@ const Dashboard = () => {
                             <Building2 className="h-4 w-4 text-muted-foreground" />
                         </CardHeader>
                         <CardContent>
-                            <div className="text-2xl font-bold">{stats.escolas || 0}</div>
+                            {/* 3. Agora não precisa mais do "|| 0" */}
+                            <div className="text-2xl font-bold">{stats.escolas}</div>
                         </CardContent>
                     </Card>
                     <Card>
@@ -74,7 +89,7 @@ const Dashboard = () => {
                             <Users className="h-4 w-4 text-muted-foreground" />
                         </CardHeader>
                         <CardContent>
-                            <div className="text-2xl font-bold">{stats.professores || 0}</div>
+                            <div className="text-2xl font-bold">{stats.professores}</div>
                         </CardContent>
                     </Card>
                     <Card>
@@ -83,7 +98,7 @@ const Dashboard = () => {
                             <BookOpen className="h-4 w-4 text-muted-foreground" />
                         </CardHeader>
                         <CardContent>
-                            <div className="text-2xl font-bold">{stats.disciplinas || 0}</div>
+                            <div className="text-2xl font-bold">{stats.disciplinas}</div>
                         </CardContent>
                     </Card>
                     <Card>
@@ -92,7 +107,7 @@ const Dashboard = () => {
                             <Calendar className="h-4 w-4 text-muted-foreground" />
                         </CardHeader>
                         <CardContent>
-                            <div className="text-2xl font-bold">{stats.alocacoes || 0}</div>
+                            <div className="text-2xl font-bold">{stats.alocacoes}</div>
                         </CardContent>
                     </Card>
                 </div>

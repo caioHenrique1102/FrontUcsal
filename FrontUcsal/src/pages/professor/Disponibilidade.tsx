@@ -1,143 +1,137 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
+import { Checkbox } from '@/components/ui/checkbox'; // Certifique-se que a importação está correta
 import { Badge } from '@/components/ui/badge';
 import { Clock } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
+import { fetchJsonWithAuth, fetchWithAuth } from '@/lib/api'; // Meus helpers
 
-// Interfaces para tipagem dos dados da API
+// --- Interfaces para Tipagem ---
 interface Horario {
-    id: string;
-    diaSemana: string;
-    turno: string;
+    id: string; // ID do Horário
+    diaSemana: 'SEGUNDA' | 'TERCA' | 'QUARTA' | 'QUINTA' | 'SEXTA' | 'SABADO';
+    turno: 'MANHA' | 'TARDE' | 'NOITE';
     horarioInicio: string;
     horarioFinal: string;
 }
 
 interface ProfessorHorario {
-    id: string;
+    id: string; // ID da Relação ProfessorHorario
     professorResponseSimples: { id: string; nome: string; };
     horarioResponse: Horario;
 }
+// -----------------------------
+
+// Mapeamentos para exibir nomes amigáveis
+const DIAS_MAP: Record<Horario['diaSemana'], string> = {
+    SEGUNDA: 'Segunda-feira', TERCA: 'Terça-feira', QUARTA: 'Quarta-feira',
+    QUINTA: 'Quinta-feira', SEXTA: 'Sexta-feira', SABADO: 'Sábado'
+};
+const TURNOS_MAP: Record<Horario['turno'], string> = {
+    MANHA: 'Manhã', TARDE: 'Tarde', NOITE: 'Noite'
+};
 
 const Disponibilidade = () => {
     const { user } = useAuth();
 
-    // Estado para todos os horários possíveis
     const [horariosPossiveis, setHorariosPossiveis] = useState<Horario[]>([]);
-
-    // Estado para os horários que o professor já selecionou (vindo da API)
-    const [profHorarios, setProfHorarios] = useState<ProfessorHorario[]>([]);
-
-    // Estado para controlar os IDs dos horários selecionados na UI
-    const [horariosSelected, setHorariosSelected] = useState<Set<string>>(new Set());
-
+    const [profHorariosSalvos, setProfHorariosSalvos] = useState<ProfessorHorario[]>([]);
+    const [horariosSelectedUI, setHorariosSelectedUI] = useState<Set<string>>(new Set());
     const [loading, setLoading] = useState(true);
 
-    // Função para buscar os dados da API
+    // Minha função para buscar os dados da API
     const fetchData = useCallback(async () => {
-        // Apenas busca os dados se o usuário estiver logado
-        if (!user || !user.id) return;
+        if (!user || user.role !== 'professor' || !user.professorId) {
+            setLoading(false);
+            setHorariosPossiveis([]); setProfHorariosSalvos([]); setHorariosSelectedUI(new Set());
+            return;
+        };
 
         setLoading(true);
         try {
-            const headers = { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` };
-
-            // Busca todos os horários e os horários já associados ao professor em paralelo
-            const [horariosResponse, profHorariosResponse] = await Promise.all([
-                fetch('/api/horarios', { headers }),
-                fetch(`/api/professor-horarios?professorId=${user.id}`, { headers })
+            const [horariosData, profHorariosData] = await Promise.all([
+                fetchJsonWithAuth<Horario[]>('/api/horarios'),
+                fetchJsonWithAuth<ProfessorHorario[]>(`/api/professor-horarios?professorId=${user.professorId}`)
             ]);
 
-            if (!horariosResponse.ok || !profHorariosResponse.ok) {
-                throw new Error('Falha ao carregar dados de disponibilidade.');
-            }
+            setHorariosPossiveis(horariosData || []);
+            setProfHorariosSalvos(profHorariosData || []);
 
-            const horariosData: Horario[] = await horariosResponse.json();
-            const profHorariosData: ProfessorHorario[] = await profHorariosResponse.json();
-
-            setHorariosPossiveis(horariosData);
-            setProfHorarios(profHorariosData);
-
-            // Inicializa os checkboxes com os horários que já vieram da API
-            const selectedIds = new Set(profHorariosData.map((ph) => ph.horarioResponse.id));
-            setHorariosSelected(selectedIds);
+            const selectedHorarioIds = new Set(profHorariosData?.map((ph) => String(ph.horarioResponse.id)) || []);
+            setHorariosSelectedUI(selectedHorarioIds);
 
         } catch (error) {
-            toast.error("Erro ao carregar dados de disponibilidade.");
+            console.error("Erro ao carregar dados de disponibilidade:", error);
+            setHorariosPossiveis([]); setProfHorariosSalvos([]); setHorariosSelectedUI(new Set());
         } finally {
             setLoading(false);
         }
     }, [user]);
 
-    // Executa a busca de dados quando o componente é montado ou o usuário muda
     useEffect(() => {
         fetchData();
     }, [fetchData]);
 
-    // Função para marcar/desmarcar um horário
-    const toggleHorario = (id: string) => {
-        const newSet = new Set(horariosSelected);
-        if (newSet.has(id)) {
-            newSet.delete(id);
+    // Função chamada quando clico na div para marcar/desmarcar
+    const toggleHorario = (horarioId: string) => {
+        const idAsString = String(horarioId);
+        const newSelectedSet = new Set(horariosSelectedUI);
+        if (newSelectedSet.has(idAsString)) {
+            newSelectedSet.delete(idAsString);
         } else {
-            newSet.add(id);
+            newSelectedSet.add(idAsString);
         }
-        setHorariosSelected(newSet);
+        setHorariosSelectedUI(newSelectedSet);
     };
 
-    // Função para salvar as alterações
+    // Minha função para salvar as alterações na API
     const handleSave = async () => {
-        if (!user) return;
+        if (!user || !user.professorId) return;
 
-        // Compara os horários originais com os novos para saber o que adicionar e remover
-        const originalHorarioIds = new Set(profHorarios.map(ph => ph.horarioResponse.id));
+        const originalHorarioIds = new Set(profHorariosSalvos.map(ph => String(ph.horarioResponse.id)));
+        const relacoesParaDeletar = profHorariosSalvos.filter(ph => !horariosSelectedUI.has(String(ph.horarioResponse.id)));
+        const idsHorarioParaAdicionar = Array.from(horariosSelectedUI).filter(id => !originalHorarioIds.has(id));
 
-        const horariosParaDeletar = profHorarios.filter(ph => !horariosSelected.has(ph.horarioResponse.id));
-        const horariosParaAdicionar = Array.from(horariosSelected).filter(id => !originalHorarioIds.has(id));
-
+        setLoading(true);
         try {
-            // Cria as promises de deleção
-            const deletePromises = horariosParaDeletar.map(ph =>
-                fetch(`/api/professor-horarios/${ph.id}`, {
-                    method: 'DELETE',
-                    headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` }
-                })
+            const deletePromises = relacoesParaDeletar.map(ph =>
+                fetchWithAuth(`/api/professor-horarios/${ph.id}`, { method: 'DELETE' })
             );
 
-            // Cria as promises de adição
-            const addPromises = horariosParaAdicionar.map(horarioId =>
-                fetch('/api/professor-horarios', {
+            const addPromises = idsHorarioParaAdicionar.map(horarioId =>
+                fetchWithAuth('/api/professor-horarios', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${localStorage.getItem('authToken')}`
-                    },
-                    body: JSON.stringify({ professorId: user.id, horarioId: horarioId })
+                    body: JSON.stringify({ professorId: user.professorId, horarioId: horarioId })
                 })
             );
 
-            // Executa todas as promises
             await Promise.all([...deletePromises, ...addPromises]);
-
             toast.success('Disponibilidade atualizada com sucesso!');
+            await fetchData();
 
-            // Atualiza os dados da tela para refletir o novo estado salvo
-            fetchData();
         } catch (error) {
-            toast.error('Erro ao salvar disponibilidade.');
+            console.error('Erro ao salvar disponibilidade:', error);
+            toast.error('Falha ao salvar. Recarregando dados...');
+            await fetchData();
+        } finally {
+            setLoading(false);
         }
     };
 
-    // Agrupa os horários por dia da semana para a renderização
     const groupedByDia = horariosPossiveis.reduce((acc, horario) => {
-        const dia = horario.diaSemana;
-        if (!acc[dia]) acc[dia] = [];
-        acc[dia].push(horario);
+        const diaKey = horario.diaSemana;
+        if (!acc[diaKey]) acc[diaKey] = [];
+        acc[diaKey].push(horario);
         return acc;
-    }, {} as Record<string, Horario[]>);
+    }, {} as Record<Horario['diaSemana'], Horario[]>);
+
+    const diasOrdenados = Object.keys(DIAS_MAP) as Horario['diaSemana'][];
+
+    if (user?.role !== 'professor') {
+        return <div className="p-6">Acesso não autorizado.</div>;
+    }
 
     return (
         <div className="p-6 space-y-6">
@@ -148,52 +142,70 @@ const Disponibilidade = () => {
                 </div>
                 <Button onClick={handleSave} disabled={loading}>
                     <Clock className="h-4 w-4 mr-2" />
-                    Salvar Disponibilidade
+                    {loading ? 'Salvando...' : 'Salvar Disponibilidade'}
                 </Button>
             </div>
 
-            {loading ? <p>Carregando...</p> : (
+            {loading && horariosPossiveis.length === 0 ? <p>Carregando horários...</p> : (
                 <>
                     <Card className="bg-primary/5 border-primary/20">
                         <CardHeader>
                             <CardTitle className="text-lg">Semestre Vigente</CardTitle>
-                            <CardDescription>Você selecionou {horariosSelected.size} horários disponíveis</CardDescription>
+                            <CardDescription>Você selecionou {horariosSelectedUI.size} horários disponíveis</CardDescription>
                         </CardHeader>
                     </Card>
                     <div className="space-y-4">
-                        {Object.entries(groupedByDia).map(([dia, horarios]) => (
-                            <Card key={dia}>
-                                <CardHeader>
-                                    <CardTitle className="text-lg capitalize">{dia.toLowerCase().replace('_', '-')}</CardTitle>
-                                </CardHeader>
-                                <CardContent>
-                                    <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-                                        {horarios.map((horario) => (
-                                            <div
-                                                key={horario.id}
-                                                className={`p-4 border rounded-lg cursor-pointer transition-colors ${horariosSelected.has(horario.id) ? 'bg-primary/10 border-primary/30' : 'hover:bg-muted/50'}`}
-                                                onClick={() => toggleHorario(horario.id)}
-                                            >
-                                                <div className="flex items-start gap-3">
-                                                    <Checkbox checked={horariosSelected.has(horario.id)} className="mt-1" />
-                                                    <div className="flex-1">
-                                                        <div className="flex items-center justify-between">
-                                                            <p className="font-medium">{`${horario.horarioInicio} - ${horario.horarioFinal}`}</p>
-                                                            <Badge variant="outline" className="capitalize">{horario.turno.toLowerCase()}</Badge>
+                        {diasOrdenados.map((diaKey) => {
+                            const horariosDoDia = groupedByDia[diaKey];
+                            if (!horariosDoDia || horariosDoDia.length === 0) return null;
+
+                            return (
+                                <Card key={diaKey}>
+                                    <CardHeader>
+                                        <CardTitle className="text-lg">{DIAS_MAP[diaKey]}</CardTitle>
+                                    </CardHeader>
+                                    <CardContent>
+                                        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                                            {horariosDoDia
+                                                .sort((a,b) => a.horarioInicio.localeCompare(b.horarioInicio))
+                                                .map((horario) => {
+                                                    const horarioIdStr = String(horario.id);
+                                                    const isSelected = horariosSelectedUI.has(horarioIdStr);
+                                                    return (
+                                                        <div
+                                                            key={horarioIdStr}
+                                                            className={`p-4 border rounded-lg cursor-pointer transition-colors ${
+                                                                isSelected ? 'bg-primary/10 border-primary/30' : 'hover:bg-muted/50'
+                                                            }`}
+                                                            onClick={() => toggleHorario(horarioIdStr)}
+                                                        >
+                                                            <div className="flex items-start gap-3">
+                                                                {/* CORREÇÃO APLICADA AQUI: Removi o readOnly */}
+                                                                <Checkbox checked={isSelected} className="mt-1" />
+                                                                <div className="flex-1">
+                                                                    <div className="flex items-center justify-between">
+                                                                        <p className="font-medium">{`${horario.horarioInicio} - ${horario.horarioFinal}`}</p>
+                                                                        <Badge variant="outline" className="capitalize">{TURNOS_MAP[horario.turno].toLowerCase()}</Badge>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
                                                         </div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </CardContent>
-                            </Card>
-                        ))}
+                                                    );
+                                                })}
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                            );
+                        })}
+                        {horariosPossiveis.length === 0 && !loading && <p>Nenhum horário cadastrado no sistema para seleção.</p>}
                     </div>
                 </>
             )}
         </div>
     );
 };
+
+// Não preciso mais exportar a interface RelatorioProfessor daqui
+// interface RelatorioProfessor { ... }
 
 export default Disponibilidade;

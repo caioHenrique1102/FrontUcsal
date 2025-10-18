@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,137 +9,190 @@ import { Badge } from '@/components/ui/badge';
 import { Plus, Pencil, GraduationCap, Trash } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
+import { fetchJsonWithAuth, fetchWithAuth } from '@/lib/api'; // Meus helpers
 
+// Interface para Formacao como vem da API
 interface Formacao {
     id: string;
-    categoria: string;
+    categoria: CategoriaTitulacao;
     nomeInstituicao: string;
     nomeCurso: string;
-    anoConclusao: string;
+    anoConclusao: string; // Vem como string 'YYYY-MM-DD'
+    professorResponse: { id: string; nome: string; }; // Vem na resposta
 }
+
+// Enum para Categoria (espelhando o backend)
+type CategoriaTitulacao = 'GRADUACAO' | 'ESPECIALIZACAO' | 'MBA' | 'MESTRADO' | 'DOUTORADO' | 'POS_DOUTORADO';
+
+// Mapeamento para exibição amigável das categorias
+const CATEGORIA_MAP: Record<CategoriaTitulacao, string> = {
+    GRADUACAO: 'Graduação',
+    ESPECIALIZACAO: 'Especialização',
+    MBA: 'MBA',
+    MESTRADO: 'Mestrado',
+    DOUTORADO: 'Doutorado',
+    POS_DOUTORADO: 'Pós-Doutorado'
+};
 
 const Formacao = () => {
     const { user } = useAuth();
-    const [formacoes, setFormacoes] = useState<Formacao[]>([]);
+    // A API de Formação do professor só permite uma.
+    // Então, eu armazeno ou 'null' ou o objeto Formacao.
+    const [formacao, setFormacao] = useState<Formacao | null>(null);
     const [loading, setLoading] = useState(true);
 
-    useEffect(() => {
-        const fetchFormacoes = async () => {
-            if (!user) return;
-            try {
-                const response = await fetch(`/api/formacoes?professorId=${user.id}`, { // Endpoint hipotético
-                    headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` }
-                });
-                if (!response.ok) throw new Error('Falha ao buscar formações');
-                const data = await response.json();
-                setFormacoes(data);
-            } catch (error) {
-                toast.error('Erro ao carregar formações.');
-            } finally {
-                setLoading(false);
-            }
+    // Busco a formação do professor logado
+    const fetchFormacao = useCallback(async () => {
+        if (!user || user.role !== 'professor' || !user.professorId) {
+            setLoading(false);
+            return;
         };
-        fetchFormacoes();
+
+        setLoading(true);
+        try {
+            // Eu chamo o endpoint que busca a formação do professor logado
+            const data = await fetchJsonWithAuth<Formacao>('/api/formacoes/minhas');
+            setFormacao(data); // Armazeno a formação (ou null se não houver)
+        } catch (error) {
+            // Se der 404 (EntityNotFound), a API que eu criei trata e o fetchJsonWithAuth retorna null
+            if (error instanceof Error && error.message.includes('404')) {
+                setFormacao(null); // Professor não tem formação cadastrada
+            } else {
+                console.error('Erro ao carregar formação:', error);
+            }
+        } finally {
+            setLoading(false);
+        }
     }, [user]);
 
+    useEffect(() => {
+        fetchFormacao();
+    }, [fetchFormacao]);
+
+    // Estados para o formulário do modal
     const [isDialogOpen, setIsDialogOpen] = useState(false);
-    const [editingFormacao, setEditingFormacao] = useState<Formacao | null>(null);
-    const [categoria, setCategoria] = useState('');
+    // Não preciso mais de 'editingFormacao', pois só pode haver uma
+    const [categoria, setCategoria] = useState<CategoriaTitulacao | ''>('');
     const [instituicao, setInstituicao] = useState('');
     const [curso, setCurso] = useState('');
-    const [anoConclusao, setAnoConclusao] = useState('');
+    const [anoConclusao, setAnoConclusao] = useState(''); // Armazeno apenas o ano (YYYY)
 
-    const categorias = ['GRADUACAO', 'ESPECIALIZACAO', 'MBA', 'MESTRADO', 'DOUTORADO', 'POS_DOUTORADO'];
+    const categoriasOptions = Object.keys(CATEGORIA_MAP) as CategoriaTitulacao[];
 
+    // Função para salvar (criar ou editar)
     const handleSave = async () => {
-        if (!categoria || !instituicao || !curso || !anoConclusao || !user) {
+        if (!categoria || !instituicao.trim() || !curso.trim() || !anoConclusao) {
             toast.error('Todos os campos são obrigatórios');
             return;
         }
+        const anoNum = parseInt(anoConclusao);
+        if (isNaN(anoNum) || anoNum < 1900 || anoNum > new Date().getFullYear() + 5) {
+            toast.error('Ano de conclusão inválido.');
+            return;
+        }
 
-        const formacaoData = { nomeCurso: curso, anoConclusao: `${anoConclusao}-01-01`, nomeInstituicao: instituicao, categoria, professorId: user.id };
-        const url = editingFormacao ? `/api/formacoes/${editingFormacao.id}` : '/api/formacoes';
-        const method = editingFormacao ? 'PATCH' : 'POST';
+        // A API espera 'YYYY-MM-DD', então eu formato
+        const formacaoData = {
+            nomeCurso: curso,
+            anoConclusao: `${anoNum}-01-01`,
+            nomeInstituicao: instituicao,
+            categoria,
+            // O professorId não é necessário no corpo, o backend pega do usuário logado
+        };
+
+        // Decido se vou CRIAR (POST) ou ATUALIZAR (PATCH)
+        const url = formacao ? `/api/formacoes/${formacao.id}` : '/api/formacoes';
+        const method = formacao ? 'PATCH' : 'POST';
 
         try {
-            const response = await fetch(url, {
+            const savedFormacao = await fetchJsonWithAuth<Formacao>(url, {
                 method,
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
                 body: JSON.stringify(formacaoData),
             });
 
-            if (!response.ok) throw new Error('Falha ao salvar formação');
-            const savedFormacao = await response.json();
-
-            if (editingFormacao) {
-                setFormacoes(formacoes.map(f => (f.id === editingFormacao.id ? savedFormacao : f)));
-                toast.success('Formação atualizada com sucesso');
-            } else {
-                setFormacoes([...formacoes, savedFormacao]);
-                toast.success('Formação cadastrada com sucesso');
-            }
+            setFormacao(savedFormacao); // Atualizo o estado local
+            toast.success(`Formação ${formacao ? 'atualizada' : 'cadastrada'} com sucesso`);
             closeDialog();
         } catch (error) {
-            toast.error('Erro ao salvar formação');
+            console.error('Erro ao salvar formação:', error);
         }
     };
 
-    const handleDelete = async (id: string) => {
+    // Função para deletar a formação
+    const handleDelete = async () => {
+        if (!formacao || !window.confirm("Tem certeza que deseja excluir sua formação?")) {
+            return;
+        }
         try {
-            await fetch(`/api/formacoes/${id}`, {
-                method: 'DELETE',
-                headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` }
-            });
-            setFormacoes(formacoes.filter(f => f.id !== id));
+            await fetchWithAuth(`/api/formacoes/${formacao.id}`, { method: 'DELETE' });
+            setFormacao(null); // Limpo o estado local
             toast.success('Formação removida com sucesso.');
         } catch(err) {
-            toast.error('Erro ao remover formação.');
+            console.error('Erro ao remover formação:', err);
         }
     }
 
+    // Limpa o formulário e fecha o modal
     const closeDialog = () => {
         setIsDialogOpen(false);
-        setEditingFormacao(null);
-        setCategoria('');
-        setInstituicao('');
-        setCurso('');
-        setAnoConclusao('');
+        // Não limpo os campos se estiver editando, apenas fecho
+        if (!formacao) {
+            setCategoria('');
+            setInstituicao('');
+            setCurso('');
+            setAnoConclusao('');
+        }
     };
 
-    const openEdit = (formacao: Formacao) => {
-        setEditingFormacao(formacao);
-        setCategoria(formacao.categoria);
-        setInstituicao(formacao.nomeInstituicao);
-        setCurso(formacao.nomeCurso);
-        setAnoConclusao(formacao.anoConclusao.substring(0, 4));
+    // Preenche o formulário para edição (ou abre limpo para criar)
+    const openDialog = () => {
+        if (formacao) {
+            // Se já existe, preencho os campos para EDIÇÃO
+            setCategoria(formacao.categoria);
+            setInstituicao(formacao.nomeInstituicao);
+            setCurso(formacao.nomeCurso);
+            setAnoConclusao(formacao.anoConclusao.substring(0, 4)); // Pego só o YYYY
+        } else {
+            // Se não existe, limpo os campos para CRIAÇÃO
+            setCategoria('');
+            setInstituicao('');
+            setCurso('');
+            setAnoConclusao('');
+        }
         setIsDialogOpen(true);
     };
+
+    if (user?.role !== 'professor') {
+        return <div className="p-6">Acesso não autorizado.</div>;
+    }
 
     return (
         <div className="p-6 space-y-6">
             <div className="flex justify-between items-center">
                 <div>
                     <h1 className="text-3xl font-bold">Minha Formação</h1>
-                    <p className="text-muted-foreground">Gerencie suas formações acadêmicas</p>
+                    <p className="text-muted-foreground">Gerencie sua formação acadêmica (limite de 1 cadastro)</p>
                 </div>
+                {/* Modal de Criar/Editar */}
                 <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
                     <DialogTrigger asChild>
-                        <Button onClick={() => { setIsDialogOpen(true); }}>
-                            <Plus className="h-4 w-4 mr-2" />
-                            Adicionar Formação
+                        {/* O botão muda de 'Adicionar' para 'Editar' se já existir formação */}
+                        <Button onClick={openDialog} disabled={loading}>
+                            {formacao ? <Pencil className="h-4 w-4 mr-2" /> : <Plus className="h-4 w-4 mr-2" />}
+                            {formacao ? 'Editar Formação' : 'Adicionar Formação'}
                         </Button>
                     </DialogTrigger>
                     <DialogContent>
                         <DialogHeader>
-                            <DialogTitle>{editingFormacao ? 'Editar Formação' : 'Nova Formação'}</DialogTitle>
+                            <DialogTitle>{formacao ? 'Editar Formação' : 'Nova Formação'}</DialogTitle>
                         </DialogHeader>
                         <div className="space-y-4 py-4">
                             <div className="space-y-2">
                                 <Label>Categoria</Label>
-                                <Select value={categoria} onValueChange={setCategoria}>
+                                <Select value={categoria} onValueChange={(value) => setCategoria(value as CategoriaTitulacao)}>
                                     <SelectTrigger><SelectValue placeholder="Selecione..." /></SelectTrigger>
                                     <SelectContent>
-                                        {categorias.map((cat) => <SelectItem key={cat} value={cat}>{cat}</SelectItem>)}
+                                        {categoriasOptions.map((cat) => <SelectItem key={cat} value={cat}>{CATEGORIA_MAP[cat]}</SelectItem>)}
                                     </SelectContent>
                                 </Select>
                             </div>
@@ -152,21 +205,23 @@ const Formacao = () => {
                                 <Input id="curso" value={curso} onChange={(e) => setCurso(e.target.value)} />
                             </div>
                             <div className="space-y-2">
-                                <Label htmlFor="ano">Ano de Conclusão</Label>
+                                <Label htmlFor="ano">Ano de Conclusão (YYYY)</Label>
                                 <Input id="ano" type="number" value={anoConclusao} onChange={(e) => setAnoConclusao(e.target.value)} />
                             </div>
                         </div>
                         <DialogFooter>
                             <Button variant="outline" onClick={closeDialog}>Cancelar</Button>
-                            <Button onClick={handleSave}>Salvar</Button>
+                            <Button onClick={handleSave}>{formacao ? 'Atualizar' : 'Salvar'}</Button>
                         </DialogFooter>
                     </DialogContent>
                 </Dialog>
             </div>
 
-            {loading ? <p>Carregando...</p> : (
+            {/* Exibição da Formação */}
+            {loading ? <p>Carregando formação...</p> : (
                 <div className="grid gap-4">
-                    {formacoes.map((formacao) => (
+                    {/* Se existir formação, eu mostro o Card */}
+                    {formacao ? (
                         <Card key={formacao.id}>
                             <CardHeader>
                                 <div className="flex items-start justify-between">
@@ -179,24 +234,25 @@ const Formacao = () => {
                                             <CardDescription>{formacao.nomeInstituicao}</CardDescription>
                                         </div>
                                     </div>
-                                    <Badge>{formacao.categoria}</Badge>
+                                    <Badge>{CATEGORIA_MAP[formacao.categoria]}</Badge>
                                 </div>
                             </CardHeader>
                             <CardContent>
                                 <div className="flex items-center justify-between">
-                                    <p className="text-sm text-muted-foreground">Concluído em {new Date(formacao.anoConclusao).getFullYear()}</p>
-                                    <div className='flex gap-2'>
-                                        <Button variant="outline" size="sm" onClick={() => openEdit(formacao)}>
-                                            <Pencil className="h-4 w-4 mr-2" /> Editar
-                                        </Button>
-                                        <Button variant="destructive" size="sm" onClick={() => handleDelete(formacao.id)}>
-                                            <Trash className="h-4 w-4 mr-2" /> Excluir
-                                        </Button>
-                                    </div>
+                                    <p className="text-sm text-muted-foreground">
+                                        Concluído em {formacao.anoConclusao.substring(0, 4)}
+                                    </p>
+                                    {/* Botão de Excluir */}
+                                    <Button variant="destructive" size="sm" onClick={() => handleDelete()}>
+                                        <Trash className="h-4 w-4 mr-2" /> Excluir
+                                    </Button>
                                 </div>
                             </CardContent>
                         </Card>
-                    ))}
+                    ) : (
+                        // Se não existir, mostro uma mensagem
+                        <p>Nenhuma formação cadastrada.</p>
+                    )}
                 </div>
             )}
         </div>
