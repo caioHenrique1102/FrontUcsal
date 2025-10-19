@@ -158,7 +158,7 @@ const Escolas = () => {
                                     onChange={(e) => setNome(e.target.value)}
                                     placeholder="Ex: ESCOLA_DE_EDUCACAO"
                                 />
-                                <p className="text-xs text-muted-foreground">O nome deve ser o valor do Enum do backend (ex: ESCOLA_DE_EDUCACAO).</p>
+                                <p className="text-xs text-muted-foreground">O nome deve (ex: ESCOLA_DE_EDUCACAO).</p>
                             </div>
                         </div>
                         <DialogFooter>
@@ -169,12 +169,12 @@ const Escolas = () => {
                 </Dialog>
             </div>
 
-            {/* Mostro o estado de carregamento */}
+
             {loading ? (
                 <p>Carregando escolas...</p>
             ) : (
                 <div className="grid gap-4 md:grid-cols-2">
-                    {/* Mapeio as escolas buscadas da API */}
+
                     {escolas.map((escola) => (
                         <Card key={escola.id}>
                             <CardHeader>
@@ -182,7 +182,7 @@ const Escolas = () => {
                                     <div className="flex-1">
                                         <CardTitle className="flex items-center gap-2">
                                             <Building2 className="h-5 w-5" />
-                                            {/* Exibo o nome da categoria vindo da API, formatado */}
+
                                             {escola.categoriaEscola.replace(/_/g, ' ')}
                                         </CardTitle>
                                         <CardDescription className="mt-2">
